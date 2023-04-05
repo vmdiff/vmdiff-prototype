@@ -1,0 +1,5 @@
+@import '~antd/dist/antd.css';
+
+div.ant-tree-treenode {
+    width: max-content;
+}

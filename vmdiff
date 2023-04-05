@@ -1,0 +1,328 @@
+#! env python3
+"""
+vmdiff CLI
+"""
+
+__author__ = "Atlassian Icarus Labs"
+__version__ = "0.1.0"
+__license__ = "MIT"
+
+from typing import Optional, List
+import typer
+import pathlib
+import subprocess
+import sys
+import shlex
+
+import os
+import re
+
+import json
+
+from datetime import datetime
+from struct import unpack, pack
+
+
+from rich.table import Table
+from rich import print
+
+
+app = typer.Typer()
+
+input_path_options = {
+    "exists": True,
+    "rich_help_panel": "Input and output",
+    "show_default": False
+}
+
+
+def main(
+    input_dir: pathlib.Path = typer.Argument(..., help="Path to virtual machine directory, or any directory containing .vmdk/.vmem files.",
+                                             file_okay=False, **input_path_options),
+    from_disk: pathlib.Path = typer.Option(
+        None, "--from-disk", "-fd", help="Path (or filename) of first chronological disk snapshot.",
+        **input_path_options),
+    to_disk: pathlib.Path = typer.Option(
+        None, "--to-disk", "-td", help="Path (or filename) of second chronological disk snapshot.",
+        **input_path_options),
+    from_memory: pathlib.Path = typer.Option(
+        None, "--from-memory", "-fm", help="Path (or filename) of first chronological memory snapshot.",
+        **input_path_options),
+    to_memory: pathlib.Path = typer.Option(
+        None, "--to-memory", "-tm", help="Path (or filename) of second chronological memory snapshot.",
+        **input_path_options),
+    from_snapshot: str = typer.Option(
+        None, "--from-snapshot", "-fs", help="First chronological snapshot ID obtained via --list-snapshots.", rich_help_panel="Input and output", show_default=False),
+    to_snapshot: str = typer.Option(
+        None, "--to-snapshot", "-ts", help="Second chronological snapshot ID obtained via --list-snapshots.", rich_help_panel="Input and output", show_default=False),
+    list_snapshots: bool = typer.Option(
+        False, "--list-snapshots", "-l", help="Show information about the VM snapshots in INPUT_DIR, e.g. the files belonging to each snapshot."),
+    ignore_path: Optional[List[str]] = typer.Option(
+        [], "--ignore-path", "-i", help="List of disk path regular expressions to ignore when diffing. Multiple values accepted via e.g. \"--ignore-path /path/one --ignore-path /path/two\"", rich_help_panel="Configuring"),
+    filter_path: Optional[List[str]] = typer.Option(
+        ["/", "\\"], "--filter-path", "-f", help="List of disk path regular expressions. Only these paths will be processed. Multiple values accepted via e.g. \"--filter-path /path/one --filter-path /path/two\"", rich_help_panel="Configuring"),
+    ignore_processes: Optional[str] = typer.Option(
+        "", "--ignore-process", "-I", help="Regular expression to ignore when diffing process names. Note that only the first 14 characters of the process name are processed (by Volatility).", rich_help_panel="Configuring"),
+    cache: bool = typer.Option(
+        True, help="Whether to cache results based on input filenames and config options.", rich_help_panel="Configuring"),
+    partition: str = typer.Option(
+        "", "--partition", "-p", help="Disk Partition ID to use. If not set, show partitions and ask which one to use via STDIN.", rich_help_panel="Input and output", show_default=False),
+    use_memory: bool = typer.Option(
+        True, help="Whether to process/diff memory.", rich_help_panel="Configuring"),
+    use_disk: bool = typer.Option(
+        True, help="Whether to process/diff disks.", rich_help_panel="Configuring"),
+    include_binary: bool = typer.Option(
+        None, help="Whether to also process and diff binary files.", rich_help_panel="Configuring"),
+    show: bool = typer.Option(
+        None, "--show", "-s", help="Open browser and show diff viewer UI.", rich_help_panel="Display"),
+    debug: bool = typer.Option(
+        None, "--debug", help="Enable debug logging."),
+
+):
+    """
+    \b
+    Generate and view diffs for .vmdk and .vmem files.
+
+    \b
+    EXAMPLES:
+
+    \b
+    What snapshots do I have to choose from?
+        ./vmdiff "~/Virtual Machines.localized/VMName/" --list-snapshots
+    \b
+    Diff snapshots 1 and 2
+        ./vmdiff "~/Virtual Machines.localized/VMName/" --from-snapshot 1 --to-snapshot 2
+    \b
+    Don't prompt me for a partition, I know it's partition 4
+        ./vmdiff "~/Virtual Machines.localized/VMName/" --from-snapshot 1 --to-snapshot 2 --partition 4
+    \b
+    Diff generic VMDK files, not necessarily from a snapshot
+        ./vmdiff ~/dir-with-vmdk-files/ --from-disk disk1.vmdk --to-disk disk2.vmdk --no-use-memory
+    \b
+    Only show files that have changed in the user's home directory
+        ./vmdiff "~/Virtual Machines.localized/VMName/" --from-snapshot 1 --to-snapshot 2 --filter-path "/home/username/"
+    \b
+    Ignore .log and .txt files
+        ./vmdiff "~/Virtual Machines.localized/VMName/" --from-snapshot 1 --to-snapshot 2 --filter-path "/home/username/" --ignore-path ".*\.log" --ignore-path ".*\.txt"
+
+    """
+
+    def run_command(command, description, env):
+        if debug:
+            print(command)
+        subprocess.run(command, stdin=sys.stdin,
+                       stdout=sys.stdout, stderr=sys.stderr, shell=True, check=True, env=env)
+
+    file_opts = (from_disk, to_disk, from_memory, to_memory)
+    disk_opts = (from_disk, to_disk)
+    memory_opts = (from_memory, to_memory)
+    snapshot_opts = (from_snapshot, to_snapshot)
+
+    if list_snapshots or (from_snapshot and to_snapshot):
+        if any(file_opts):
+            raise typer.BadParameter(
+                "--list-snapshots and --from/to-snapshot cannot be specified with any of --from-disk, --to-disk, --from-memory, --to-memory")
+        if list_snapshots:
+            table, _ = do_list_snapshots(input_dir)
+            print(table)
+            return
+    
+    # If no specific opts given, list the snapshots.
+    if not any(file_opts) and not any(disk_opts) and not any(memory_opts) and not any(snapshot_opts):
+        table, _ = do_list_snapshots(input_dir)
+        print(table)
+        return
+
+    if any(snapshot_opts):
+        if not all(snapshot_opts):
+            raise typer.BadParameter(
+                "Need both --to-snapshot and --from-snapshot when using one.")
+
+        _, snapshots = do_list_snapshots(input_dir)
+        from_disk = snapshots[from_snapshot]["disk_filename"]
+        to_disk = snapshots[to_snapshot]["disk_filename"]
+        from_memory = snapshots[from_snapshot]["memory_filename"]
+        to_memory = snapshots[to_snapshot]["memory_filename"]
+    else:
+        if any(disk_opts) and not all(disk_opts):
+            raise typer.BadParameter(
+                "Need both --to-disk and --from-disk.")
+        else:
+            from_disk = from_disk.name
+            to_disk = to_disk.name
+        if any(memory_opts) and not all(memory_opts):
+            raise typer.BadParameter(
+                "Need both --to-memory and --from-memory.")
+
+        else:
+            from_memory = from_memory.name
+            to_memory = to_memory.name
+
+    filter_path_json = json.dumps(filter_path)
+    ignore_path_json = json.dumps(ignore_path)
+
+    # Unset paths if not used, so config.py resolves USE_DISK and USE_MEMORY correctly.
+    if not use_disk:
+        from_disk = to_disk = ""
+    if not use_memory:
+        from_memory = to_memory = ""
+
+    # Convert to filenames, not file paths.
+    env_var_mapping = {
+        "FROM_DISK_IMAGE_FILENAME": from_disk,
+        "TO_DISK_IMAGE_FILENAME": to_disk,
+        "FROM_MEMORY_IMAGE_FILENAME": from_memory,
+        "TO_MEMORY_IMAGE_FILENAME": to_memory,
+        "SNAPSHOT_DIR": input_dir,
+        "FILTER_PATH_JSON": filter_path_json,
+        "IGNORE_PATH_JSON": ignore_path_json,
+        "IGNORE_PROCESSES_REGEX": ignore_processes,
+        "PARTITION_IDENTIFIER": partition,
+        "USE_CACHE": str(cache),
+        "USE_DISK": str(use_disk),
+        "USE_MEMORY": str(use_memory),
+        "DIFF_IGNORE_BINARY": str(not include_binary),
+        "VMDIFF_DEV": str(debug)
+    }
+
+    env = os.environ.copy()
+    env.update(env_var_mapping)
+
+    # Generate the docker compose run CLI args to mount the files.
+    volume_maps = [
+        f"{input_dir}:/snapshots"
+    ]
+
+    volume_args_list = []
+    for volume_map in volume_maps:
+        volume_args_list.append("-v")
+        volume_args_list.append(shlex.quote(volume_map))
+
+    parts = "docker compose --env-file .env run -i".split(
+        " ")
+    parts.extend(volume_args_list)
+
+    parts.extend(["memdiff"])
+    command = " ".join(parts)
+    if use_memory and not show:
+        run_command(command, "[green] :gear: Processing memory dump...", env)
+
+    parts[-1] = "vmdiff"
+    command = " ".join(parts)
+    if not show:
+        if use_disk:
+            message = "[green] :gear: Reading and diffing virtual disks..."
+        else:
+            message = "[green] :gear: Diffing memory..."
+        run_command(
+            command, message, env)
+
+        print("Now run with --show to display results in browser")
+
+    if show:
+        command = "docker compose --env-file .env up app"
+        print("[green] :gear: Serving results on http://localhost:5000")
+        run_command(
+            command, "[green] :gear: Serving results on localhost:5000...", env)
+
+
+def do_list_snapshots(snapshot_dir):
+
+    contents = os.listdir(snapshot_dir)
+    vmsd_filename = None
+    for filename in contents:
+        if filename.endswith(".vmsd"):
+            vmsd_filename = filename
+
+    if vmsd_filename is None:
+        raise typer.BadParameter(
+            "Couldn't find .vmsd file in input directory, so can't list snapshots.")
+
+    vmsd_path = os.path.join(snapshot_dir, vmsd_filename)
+    vmsd = parse_vmsd(vmsd_path)
+
+    table = Table(title=f"Found snapshots in {snapshot_dir}")
+
+    table.add_column("ID", style="bold")
+    table.add_column("Parent ID", style="bold", max_width=6)
+    table.add_column("Creation time", style="yellow", no_wrap=True)
+    table.add_column("Disk file", style="magenta", )
+    table.add_column("Memory file", style="magenta")
+    table.add_column("Description", style="green")
+
+    # Sort snapshots by create time.
+    for sid, snapshot in sorted(vmsd.items(), key=lambda tup: tup[1].get("create_time")):
+
+        create_time = snapshot.get("create_time")
+        disk_filename = snapshot.get("disk_filename")
+        memory_filename = snapshot.get("memory_filename")
+
+        description = snapshot.get("displayName")
+        table.add_row(sid, snapshot.get("parent"), create_time,
+                      disk_filename, memory_filename, description)
+
+    return table, vmsd
+
+
+def parse_vmsd(vmsd_path: os.PathLike):
+    def convert_time(low, high):
+        low = int(low)
+        high = int(high)
+        combinedTimeMsec = float(
+            (high * 2**32) + unpack('I', pack('i', low))[0])
+        combinedTimeSec = combinedTimeMsec / 1000000
+        timestamp = datetime.fromtimestamp(combinedTimeSec)
+
+        return timestamp.strftime('%Y-%m-%d %H:%M:%S')
+
+    with open(vmsd_path) as f:
+        lines = f.readlines()
+        sid2uid = {}
+        snapshots = {}
+        for line in lines:
+            # Ignore encoding.
+            if line.startswith(".encoding"):
+                continue
+
+            LINE = re.compile(r'(?P<key>(\w+\.?)+) = "(?P<value>[^"]+)"')
+
+            match = re.search(LINE, line)
+            key = match.group("key")
+
+            keys = key.split(".")
+            subkey = keys[-1]
+            value = match.group("value")
+
+            # Ignore "snapshot" rather than "snapshot0, snapshot1", etc.
+            sid_match = re.match(r"snapshot(\d+)$", keys[0])
+            if not sid_match:
+                continue
+            sid = sid_match.group(0)
+
+            if subkey == "uid":
+                uid = value
+                sid2uid[sid] = uid
+                snapshots[uid] = {}
+            else:
+                uid = sid2uid[sid]
+
+            if subkey == "fileName":
+                subkey = "disk_filename"
+            # It's fiiiiine.
+            if subkey == "filename":
+                subkey = "memory_filename"
+                # The .vmsd file lists memory dumps as .vmsn, but we're interested in the actual .vmem dumps.
+                value = value.replace(".vmsn", ".vmem")
+
+            snapshots[uid][subkey] = value
+
+        for sid, snapshot in snapshots.items():
+
+            create_time = convert_time(
+                snapshot["createTimeLow"], snapshot["createTimeHigh"])
+            snapshot["create_time"] = create_time
+        return snapshots
+
+
+if __name__ == "__main__":
+    typer.run(main)

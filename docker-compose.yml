@@ -1,0 +1,36 @@
+version: '3.4'
+
+services:
+  vmdiff:
+    image: vmdiff/vmdiff
+    build:
+      context: ./
+      dockerfile: ./backend/Dockerfile
+    tty: true
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/backend
+      - ./results:$RESULTS_DIR
+  memdiff:
+    image: vmdiff/memory-processor
+    build:
+      context: ./
+      dockerfile: ./memory-processing/Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./memory-processing:/memdiff
+      - ./memory-processing/volatilitycache:/home/unprivileged/.cache/volatility3
+      - ./results:$RESULTS_DIR
+  app:
+    image: vmdiff/vmdiff-app
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./results:$RESULTS_DIR
+    ports:
+      - "5000:5000"
