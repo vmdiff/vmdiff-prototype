@@ -153,6 +153,8 @@ The raw diffs are available in a directory structure mirroring the VM in the `re
 
 ## How it works
 
+![Diagram](https://community.atlassian.com/t5/image/serverpage/image-id/250141i2CC67D463D148789/image-size/large?v=v2&px=999)
+
 ### Tech Stack
 
 * [Typer](https://typer.tiangolo.com/) (CLI)
