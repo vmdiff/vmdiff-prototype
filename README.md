@@ -1,5 +1,7 @@
 # vmdiff
+
 ![logo](https://community.atlassian.com/t5/image/serverpage/image-id/250140i6BA42D04B2F49CE1/image-dimensions/280x210?v=v2)
+
 A tool to compare virtual machine snapshots, allowing you to see everything that changes on your computer.
 
 ## Blog post
