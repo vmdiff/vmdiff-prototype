@@ -1,0 +1,2 @@
+libvmdk-python
+dfvfs==20220816
