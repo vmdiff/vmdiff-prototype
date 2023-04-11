@@ -1,6 +1,11 @@
 # vmdiff
 
+![logo](https://community.atlassian.com/t5/image/serverpage/image-id/250140i6BA42D04B2F49CE1/image-dimensions/280x210?v=v2)
+
 A tool to compare virtual machine snapshots, allowing you to see everything that changes on your computer.
+
+## Blog post
+There's also a delightful [companion blog post](https://community.atlassian.com/t5/Trust-Security-articles/Introducing-vmdiff-a-tool-to-find-everything-that-changes-on/ba-p/2321969) with more context :))
 
 ## Features
 
@@ -9,6 +14,12 @@ A tool to compare virtual machine snapshots, allowing you to see everything that
 * Diffs memory (running processes, command lines, and environment variables) on Windows
 * Diffs also available to search/process via terminal as local directories (think `grep`)
 * Runs on Windows, macOS, Linux
+
+![Demo](https://community.atlassian.com/t5/image/serverpage/image-id/250126i9D3D94314406622B/image-dimensions/749x376?v=v2)
+
+![Process tree](https://community.atlassian.com/t5/image/serverpage/image-id/250138iB53029B9F025028D/image-size/large?v=v2&px=999)
+
+![Terminal parsing](https://community.atlassian.com/t5/image/serverpage/image-id/250129i6BE4A67E932C3C34/image-size/large?v=v2&px=999)
 
 ## Installation
 
@@ -141,6 +152,8 @@ The UI will then be running on `http://localhost:5000`
 The raw diffs are available in a directory structure mirroring the VM in the `results/` directory
 
 ## How it works
+
+![Diagram](https://community.atlassian.com/t5/image/serverpage/image-id/250141i2CC67D463D148789/image-size/large?v=v2&px=999)
 
 ### Tech Stack
 
